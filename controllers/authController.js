@@ -4,8 +4,8 @@ const jwt = require('jsonwebtoken');
 const { v4: uuidv4 } = require('uuid'); // Para gerar IDs únicos para JWT (jti)
 const db = require('../config/database');
 const { addToBlacklist } = require('../config/tokenBlacklist');
-const dotenv = require('dotenv');
 
+// dotenv.config() FOI REMOVIDO DAQUI
 
 const JWT_SECRET = process.env.JWT_SECRET;
 const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || '15m';
@@ -14,9 +14,11 @@ const JWT_REFRESH_EXPIRES_IN = process.env.JWT_REFRESH_EXPIRES_IN || '7d';
 const BCRYPT_SALT_ROUNDS = parseInt(process.env.BCRYPT_SALT_ROUNDS || '10');
 
 if (!JWT_SECRET || !JWT_REFRESH_SECRET) {
-    console.error("ERRO FATAL: Segredos JWT não definidos.");
+    console.error("ERRO FATAL: Segredos JWT não definidos no controller.");
     process.exit(1);
 }
+
+// --- Funções Helper ---
 
 /**
  * Gera um Access Token.
@@ -27,6 +29,7 @@ function generateAccessToken(user) {
         username: user.username,
         role: user.role, // Inclui o role no payload
     };
+    // Não inclui JTI no access token, pois geralmente não são revogados individualmente
     return jwt.sign(payload, JWT_SECRET, { expiresIn: JWT_EXPIRES_IN });
 }
 
@@ -36,41 +39,38 @@ function generateAccessToken(user) {
  */
 function generateRefreshToken(user) {
     const payload = {
-        id: user.id, // Pode incluir menos dados se preferir
+        id: user.id, // Apenas ID e role são suficientes para gerar novo access token
         role: user.role,
     };
-    // Usamos um JTI (JWT ID) único para poder adicionar este token específico à blacklist no logout
     const options = {
         expiresIn: JWT_REFRESH_EXPIRES_IN,
-        jwtid: uuidv4() // Gera um ID único para este refresh token
+        jwtid: uuidv4() // Gera um ID único (JTI) para este refresh token
     };
     return jwt.sign(payload, JWT_REFRESH_SECRET, options);
 }
 
+// --- Controladores das Rotas ---
 
 /**
  * Registra um novo usuário.
  */
 const registerUser = async (req, res) => {
-    // A validação agora é feita pelo middleware handleValidationErrors
+    // A validação de entrada é feita pelos middlewares na rota
 
     const { username, password, role } = req.body; // Pode receber 'role' opcionalmente
 
     try {
-        console.log(`[Register] Tentativa de registro para usuário: ${username}`);
+        console.log(`[Register] Iniciando registro para: ${username}`);
 
-        // Verifica se o usuário já existe (DB já trata unique constraint, mas podemos verificar antes)
-        // const existingUser = await db.findUserByUsername(username);
-        // if (existingUser) { ... } // O catch do addUser já trata o erro '23505'
-
-        console.log(`[Register] Gerando hash para senha do usuário: ${username}`);
+        // Gera o hash da senha
         const passwordHash = await bcrypt.hash(password, BCRYPT_SALT_ROUNDS);
-        console.log(`[Register] Hash gerado com sucesso.`);
+        // console.log(`[Register] Hash gerado para: ${username}`); // Log interno removido
 
-        // Salva o novo usuário (passando role se existir)
-        const newUser = await db.addUser({ username, passwordHash, role }); // Passa role
+        // Salva o novo usuário no banco de dados (passando role se existir)
+        const newUser = await db.addUser({ username, passwordHash, role }); // Passa role para a função do DB
 
-        console.log(`[Register] Usuário '${username}' registrado com sucesso com ID: ${newUser.id} e Role: ${newUser.role}`);
+        console.log(`[Register] Sucesso: Usuário ${username} (ID: ${newUser.id}, Role: ${newUser.role}) criado.`);
+        // Retorna resposta de sucesso
         res.status(201).json({
             message: 'Usuário registrado com sucesso!',
             userId: newUser.id,
@@ -79,12 +79,14 @@ const registerUser = async (req, res) => {
         });
 
     } catch (error) {
-        console.error(`[Register] Erro ao registrar usuário '${username}':`, error);
-        // Se o erro for de usuário já existente vindo do DB
+        // Verifica se o erro é de usuário duplicado vindo do DB
         if (error.message === 'Nome de usuário já existe.') {
-            return res.status(409).json({ message: 'Nome de usuário já está em uso.' });
+            // Log de aviso já acontece na camada do DB
+            return res.status(409).json({ message: 'Nome de usuário já está em uso.' }); // 409 Conflict
         }
-        res.status(500).json({ message: 'Erro interno no servidor ao tentar registrar o usuário.' });
+        // Loga outros erros fatais
+        console.error(`[Register] ERRO FATAL ao registrar ${username}:`, error);
+        res.status(500).json({ message: 'Erro interno no servidor ao registrar usuário.' });
     }
 };
 
@@ -92,30 +94,31 @@ const registerUser = async (req, res) => {
  * Autentica um usuário e retorna Access e Refresh Tokens.
  */
 const loginUser = async (req, res) => {
-    // A validação agora é feita pelo middleware handleValidationErrors
+    // A validação de entrada é feita pelos middlewares na rota
 
     const { username, password } = req.body;
 
     try {
-        console.log(`[Login] Tentativa de login para usuário: ${username}`);
+        console.log(`[Login] Tentativa de login para: ${username}`);
+        // Busca o usuário no banco de dados
         const user = await db.findUserByUsername(username);
 
+        // Verifica se o usuário existe e se a senha está correta
         if (user && await bcrypt.compare(password, user.passwordHash)) {
-            console.log(`[Login] Senha verificada com sucesso para: ${username}`);
 
-            // Gerar ambos os tokens
+            // Gera ambos os tokens
             const accessToken = generateAccessToken(user);
             const refreshToken = generateRefreshToken(user); // Gera refresh token com JTI
 
-            console.log(`[Login] Tokens gerados para: ${username}`);
+            console.log(`[Login] Sucesso: Autenticado ${username} (ID: ${user.id}, Role: ${user.role}). Tokens gerados.`);
 
-            // Enviar ambos os tokens para o cliente
-            // O Refresh Token pode ser enviado em um cookie HttpOnly seguro em produção
+            // Envia ambos os tokens para o cliente
+            // Em produção, considere enviar o refreshToken em um cookie HttpOnly e SameSite=Strict/Lax
             res.status(200).json({
                 message: 'Login bem-sucedido!',
                 accessToken: accessToken,
                 refreshToken: refreshToken, // Inclui o refresh token na resposta
-                user: { // Inclui informações do usuário (não sensíveis)
+                user: { // Inclui informações básicas do usuário (não sensíveis)
                     id: user.id,
                     username: user.username,
                     role: user.role
@@ -123,11 +126,13 @@ const loginUser = async (req, res) => {
             });
 
         } else {
-            console.warn(`[Login] Falha no login para usuário: ${username}. Credenciais inválidas.`);
-            res.status(401).json({ message: 'Credenciais inválidas.' });
+            // Usuário não encontrado ou senha incorreta
+            console.warn(`[Login] Falha: Credenciais inválidas para ${username}.`);
+            res.status(401).json({ message: 'Credenciais inválidas.' }); // 401 Unauthorized
         }
     } catch (error) {
-        console.error(`[Login] Erro ao logar usuário '${username}':`, error);
+        // Loga erros inesperados durante o login
+        console.error(`[Login] ERRO FATAL ao logar ${username}:`, error);
         res.status(500).json({ message: 'Erro interno no servidor durante o login.' });
     }
 };
@@ -137,29 +142,51 @@ const loginUser = async (req, res) => {
  * Gera um novo Access Token usando um Refresh Token válido.
  */
 const refreshToken = async (req, res) => {
-    // O token é verificado pelo middleware verifyRefreshToken, incluindo a blacklist
-    // Se chegou aqui, o refresh token é válido e não está na blacklist
+    // Validação do corpo da requisição (presença do refreshToken) feita por middleware na rota
+    const { refreshToken } = req.body;
 
-    const userId = req.user.id; // Obtém id do payload do refresh token verificado
+    try {
+        // Verifica o refresh token (validade, assinatura E blacklist)
+        jwt.verify(refreshToken, JWT_REFRESH_SECRET, async (err, decoded) => {
+            if (err) {
+                // Trata erros de verificação (expirado, inválido, etc.)
+                let status = 403; let message = 'Refresh token inválido.';
+                if (err.name === 'TokenExpiredError') { status = 401; message = 'Refresh token expirado.'; }
+                console.warn(`[Refresh] Falha: ${message}`);
+                return res.status(status).json({ message });
+            }
 
-    // Idealmente, buscaríamos o usuário no DB para garantir que ainda existe e pegar dados atualizados
-    // const user = await db.findUserById(userId); // Precisaria criar essa função em database.js
-    // if (!user) return res.status(401).json({ message: "Usuário não encontrado." });
+            // Verifica se o token está na blacklist (JTI)
+            const jti = decoded.jti;
+            if (!jti || isBlacklisted(jti)) {
+                // Log já acontece em isBlacklisted
+                return res.status(401).json({ message: 'Refresh token inválido (revogado).' });
+            }
 
-    // Para simplificar, usamos os dados do payload do refresh token (pode estar desatualizado se o role mudar)
-    const userPayload = {
-        id: req.user.id,
-        username: req.user.username, // Precisa garantir que username está no payload do refresh token
-        role: req.user.role
-    };
+            // Refresh token é válido e não está na blacklist. Gera novo Access Token.
+            const userId = decoded.id;
+            const userRole = decoded.role; // Usar dados do token (podem estar desatualizados)
 
-    // Gerar apenas um novo Access Token
-    const newAccessToken = generateAccessToken(userPayload);
+            // Opcional: Buscar usuário no DB para garantir que existe e pegar dados frescos
+            // const currentUser = await db.findUserById(userId); // Necessitaria findUserById
+            // if (!currentUser) return res.status(401).json({ message: "Usuário não encontrado." });
+            // const userPayload = { id: currentUser.id, username: currentUser.username, role: currentUser.role };
 
-    console.log(`[Refresh] Novo Access Token gerado para usuário ID: ${userId}`);
-    res.status(200).json({
-        accessToken: newAccessToken
-    });
+            // Usando dados do token por simplicidade:
+            const userPayload = { id: userId, role: userRole, username: 'N/A' /* Username não está no refresh token */ };
+
+            const newAccessToken = generateAccessToken(userPayload);
+
+            console.log(`[Refresh] Sucesso: Novo Access Token gerado para User ID ${userId}.`);
+            res.status(200).json({
+                accessToken: newAccessToken
+            });
+        });
+    } catch (error) {
+        // Captura erros inesperados (ex: se a busca no DB falhar, caso implementada)
+        console.error(`[Refresh] ERRO ao gerar novo token para User ID ${req?.user?.id || 'N/A'}:`, error);
+        res.status(500).json({ message: 'Erro ao processar a renovação do token.' });
+    }
 };
 
 
@@ -167,66 +194,74 @@ const refreshToken = async (req, res) => {
  * Invalida o Refresh Token adicionando seu JTI à blacklist.
  */
 const logoutUser = async (req, res) => {
-    const { refreshToken } = req.body; // Espera o refresh token no corpo
-
-    if (!refreshToken) {
-        return res.status(400).json({ message: 'Refresh token é obrigatório para logout.' });
-    }
+    // Validação do corpo feita por middleware na rota
+    const { refreshToken } = req.body;
 
     try {
-        // Verificar o refresh token apenas para obter o JTI de forma segura
-        // Usamos o mesmo segredo de refresh
-        jwt.verify(refreshToken, JWT_REFRESH_SECRET, (err, decoded) => {
-            if (err) {
-                // Token inválido ou expirado, não pode ser adicionado à blacklist de forma confiável
-                // Mas o logout efetivamente ocorreu do ponto de vista do cliente que perdeu o token
-                console.warn(`[Logout] Tentativa de logout com token inválido/expirado: ${err.message}`);
-                // Retornar sucesso mesmo assim, pois o objetivo é deslogar
-                return res.status(200).json({ message: 'Logout realizado (token já inválido/expirado).' });
+        // Verifica o refresh token apenas para obter o JTI de forma segura
+        jwt.verify(refreshToken, JWT_REFRESH_SECRET, { ignoreExpiration: true }, (err, decoded) => {
+            // Ignoramos expiração aqui, pois queremos invalidar mesmo se expirado recentemente
+            // Mas ainda falha se a assinatura for inválida
+            if (err && err.name !== 'TokenExpiredError') {
+                console.warn(`[Logout] Aviso: Tentativa de logout com token de refresh inválido (não expirado). Erro: ${err.message}`);
+                // Ainda retorna sucesso, pois o objetivo do cliente é deslogar.
+                return res.status(200).json({ message: 'Logout realizado (token inválido).' });
             }
 
-            // Se o token for válido e tiver um JTI, adiciona à blacklist
-            const jti = decoded.jti;
+            // Se decodificado (mesmo expirado), tenta pegar o JTI
+            const jti = decoded?.jti;
+            const userId = decoded?.id || 'N/A';
+
             if (jti) {
                 addToBlacklist(jti); // Adiciona o ID do token à blacklist
-                console.log(`[Logout] Refresh Token (JTI: ${jti}) adicionado à blacklist para usuário ID: ${decoded.id}.`);
+                console.log(`[Logout] Sucesso: Refresh Token (JTI: ${jti}) invalidado para User ID ${userId}.`);
                 res.status(200).json({ message: 'Logout bem-sucedido!' });
             } else {
-                // Token válido mas sem JTI (não deveria acontecer com nossa geração de token)
-                console.warn('[Logout] Refresh token válido, mas sem JTI para adicionar à blacklist.');
-                res.status(400).json({ message: 'Não foi possível invalidar o token.' });
+                // Token válido/expirado mas sem JTI (não deveria acontecer)
+                console.warn(`[Logout] Aviso: Token de refresh processado, mas sem JTI. Não foi possível adicionar à blacklist (User ID: ${userId}).`);
+                // Retorna sucesso mesmo assim, pois o cliente não pode mais usar o token (se expirado)
+                // ou não havia como invalidar (sem jti)
+                res.status(200).json({ message: 'Logout processado.' });
             }
         });
 
     } catch (error) {
         // Captura erros inesperados durante a verificação (embora jwt.verify use callback)
-        console.error('[Logout] Erro inesperado durante o logout:', error);
+        console.error('[Logout] ERRO INESPERADO durante o logout:', error);
         res.status(500).json({ message: 'Erro interno no servidor durante o logout.' });
     }
 };
 
 
-// Exemplo: Buscar dados do perfil do usuário logado
+/**
+ * Exemplo: Buscar dados do perfil do usuário logado.
+ */
 const getUserProfile = async (req, res) => {
     // O usuário é autenticado pelo middleware verifyAccessToken
     // Os dados do usuário (id, username, role) estão em req.user
-    const userId = req.user.id;
+    try {
+        const userId = req.user.id;
+        // Log da ação
+        console.log(`[Profile] Perfil acessado por User ID: ${userId} (${req.user.username})`);
 
-    // Em uma aplicação real, você poderia buscar mais dados do DB aqui
-    // const userProfile = await db.findUserById(userId); // Exemplo
+        // Em uma aplicação real, você poderia buscar mais dados do DB aqui
+        // const userProfile = await db.findUserById(userId); // Exemplo
 
-    console.log(`[Profile] Acessando perfil do usuário ID: ${userId}`);
-
-    // Retorna os dados disponíveis no token (ou buscados no DB)
-    res.status(200).json({
-        message: "Dados do perfil obtidos com sucesso.",
-        user: {
-            id: req.user.id,
-            username: req.user.username,
-            role: req.user.role
-            // ... outros dados do perfil se buscados no DB
-        }
-    });
+        // Retorna os dados disponíveis no token (ou buscados no DB)
+        res.status(200).json({
+            message: "Dados do perfil obtidos com sucesso.",
+            user: {
+                id: req.user.id,
+                username: req.user.username,
+                role: req.user.role
+                // ... outros dados do perfil se buscados no DB
+            }
+        });
+    } catch (error) {
+        // Loga erro ao buscar perfil
+        console.error(`[Profile] ERRO ao obter perfil para User ID ${req?.user?.id || 'N/A'}:`, error);
+        res.status(500).json({ message: 'Erro ao obter dados do perfil.' });
+    }
 };
 
 

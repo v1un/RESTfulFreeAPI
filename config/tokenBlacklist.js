@@ -16,7 +16,7 @@ const blacklistedTokens = new Set();
  */
 function addToBlacklist(jti) {
     if (jti) {
-        console.log(`[Blacklist] Adicionando token JTI ${jti} à blacklist.`);
+        // console.log(`[Blacklist] Adicionando JTI: ${jti}`); // Log comentado por padrão
         blacklistedTokens.add(jti);
     }
 }
@@ -28,8 +28,9 @@ function addToBlacklist(jti) {
  */
 function isBlacklisted(jti) {
     const blacklisted = jti ? blacklistedTokens.has(jti) : false;
+    // Só loga se realmente estiver na blacklist, pois é um evento de segurança relevante
     if (blacklisted) {
-        console.log(`[Blacklist] Token JTI ${jti} encontrado na blacklist.`);
+        console.warn(`[Blacklist] ATENÇÃO: JTI ${jti} está na blacklist (token revogado).`);
     }
     return blacklisted;
 }
@@ -37,6 +38,7 @@ function isBlacklisted(jti) {
 // Opcional: Limpeza periódica de tokens expirados (simplificado)
 // Em uma implementação real com tempos de expiração, você removeria JTIs
 // cujo 'exp' correspondente já passou. Este exemplo não faz isso automaticamente.
+// setInterval(() => { /* Lógica de limpeza */ }, SOME_INTERVAL);
 
 module.exports = {
     addToBlacklist,

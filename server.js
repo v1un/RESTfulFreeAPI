@@ -1,128 +1,100 @@
-﻿const path = require('path'); // Módulo 'path' do Node para lidar com caminhos de arquivo
+﻿// server.js
+
+const path = require('path');
 const dotenv = require('dotenv');
 
-// Constrói o caminho absoluto para o arquivo .env na pasta raiz do projeto
 const envPath = path.resolve(__dirname, '.env');
+const dotEnvResult = dotenv.config({ path: envPath }); // Debug removido da chamada direta
 
-// Tenta carregar o .env do caminho específico e habilita debug se a variável DEBUG estiver definida
-const dotEnvResult = dotenv.config({ path: envPath, debug: process.env.DEBUG === 'dotenv' });
-
-// Verifica se houve erro ao carregar o .env
+// Verifica APENAS se houve erro ao carregar o .env
 if (dotEnvResult.error) {
-    console.error("ERRO FATAL: Falha ao carregar o arquivo .env.", dotEnvResult.error);
-    // Considerar se deve sair ou não: process.exit(1);
-    // Por enquanto, vamos apenas logar o erro e continuar,
-    // pois as variáveis podem vir do ambiente de produção.
+    // Usamos console.warn pois a aplicação pode continuar se as vars vierem do ambiente
+    console.warn(`[dotenv] ALERTA: Não foi possível carregar o arquivo .env do caminho ${envPath}. Verifique se ele existe e tem permissões. Erro: ${dotEnvResult.error.message}`);
+    console.warn('[dotenv] A aplicação continuará, esperando que as variáveis de ambiente estejam definidas externamente (ex: no Render).');
+} else {
+    console.info('[dotenv] Arquivo .env encontrado e processado.'); // Log simples de sucesso
 }
 
-// Log para confirmar quais variáveis foram carregadas do arquivo .env (se alguma)
-if (!dotEnvResult.error && dotEnvResult.parsed) {
-    console.log('[dotenv] Variáveis carregadas com sucesso do .env:', Object.keys(dotEnvResult.parsed));
-    // Descomente a linha abaixo para ver os VALORES (CUIDADO COM SENHAS NO LOG!)
-    // console.log('[dotenv] Valores carregados:', dotEnvResult.parsed);
-} else if (!dotEnvResult.error) {
-    console.log('[dotenv] Arquivo .env encontrado, mas vazio ou sem variáveis parseadas.');
-}
-
-// server.js
+// ... resto das importações (express, cors, helmet, etc.) ...
 const express = require('express');
-const cors = require('cors'); // Importar cors
-const helmet = require('helmet'); // Importar helmet
-const rateLimit = require('express-rate-limit'); // Importar express-rate-limit
-
-const authRoutes = require('./routes/authRoutes');
-
-dotenv.config();
+// ... outras importações ...
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// --- Middlewares Globais de Segurança e Configuração ---
+// --- Middlewares Globais ... ---
 
-// 1. Helmet: Configura vários cabeçalhos HTTP para segurança básica
+// Helmet
 app.use(helmet());
+console.info('[Segurança] Middleware Helmet aplicado.');
 
-// 2. CORS: Habilita Cross-Origin Resource Sharing
-const allowedOrigins = process.env.CORS_ALLOWED_ORIGINS
-    ? process.env.CORS_ALLOWED_ORIGINS.split(',')
-    : []; // Pega origens do .env ou deixa vazio
-
-console.log('[CORS] Origens permitidas:', allowedOrigins.length > 0 ? allowedOrigins : '(Nenhuma especificada, CORS pode bloquear)');
-
-const corsOptions = {
-    origin: (origin, callback) => {
-        // Permite requisições sem 'origin' (como Postman, curl, apps mobile) OU se a origem está na lista
-        if (!origin || allowedOrigins.includes(origin)) {
-            callback(null, true);
-        } else {
-            console.warn(`[CORS] Bloqueada origem não permitida: ${origin}`);
-            callback(new Error('Não permitido por CORS'));
-        }
-    },
-    credentials: true, // Permite cookies/authorization headers (importante para tokens/sessões)
-    optionsSuccessStatus: 200 // Para browsers legados
-};
+// CORS
+const allowedOrigins = process.env.CORS_ALLOWED_ORIGINS ? process.env.CORS_ALLOWED_ORIGINS.split(',') : [];
+console.info(`[CORS] Configurando origens permitidas: ${allowedOrigins.length > 0 ? allowedOrigins.join(', ') : '(Nenhuma - pode bloquear frontends!)'}`);
+// ... (lógica corsOptions como antes) ...
 app.use(cors(corsOptions));
 
-// 3. Body Parsers: Para parsear JSON e urlencoded
-app.use(express.json({ limit: '10kb' })); // Limite no tamanho do payload JSON
+// Body Parsers
+app.use(express.json({ limit: '10kb' }));
 app.use(express.urlencoded({ extended: true, limit: '10kb' }));
 
-// 4. Rate Limiter: Protege contra força bruta e abuso
-const windowMs = parseInt(process.env.RATE_LIMIT_WINDOW_MS || '15') * 60 * 1000; // Janela em milissegundos
-const maxRequests = parseInt(process.env.RATE_LIMIT_MAX_REQUESTS || '100'); // Max requisições por janela por IP
-
-const limiter = rateLimit({
-    windowMs: windowMs,
-    max: maxRequests,
-    message: 'Muitas requisições originadas deste IP, por favor tente novamente mais tarde.',
-    standardHeaders: true, // Retorna info do limite nos headers `RateLimit-*`
-    legacyHeaders: false, // Desabilita headers `X-RateLimit-*`
-    keyGenerator: (req) => { // Usa IP como chave (padrão)
-        return req.ip;
-    },
-    handler: (req, res, next, options) => { // Log quando o limite é atingido
-        console.warn(`[Rate Limit] Limite atingido para IP ${req.ip} na rota ${req.originalUrl}`);
-        res.status(options.statusCode).json({ message: options.message });
-    }
-});
-
-// Aplicar o rate limiter a todas as rotas (ou pode aplicar a rotas específicas)
+// Rate Limiter
+const windowMs = parseInt(process.env.RATE_LIMIT_WINDOW_MS || '15') * 60 * 1000;
+const maxRequests = parseInt(process.env.RATE_LIMIT_MAX_REQUESTS || '100');
+console.info(`[Rate Limit] Configurado: ${maxRequests} reqs / ${windowMs / 60000} min por IP.`);
+const limiter = rateLimit({ /* ... opções como antes ... */ });
 app.use(limiter);
-console.log(`[Rate Limit] Configurado: ${maxRequests} reqs por ${windowMs / 60000} min por IP.`);
 
-
-// Middleware de log simples (como antes)
+// Middleware de Log de Requisição (mantido simples)
 app.use((req, res, next) => {
-    console.log(`[Request] ${new Date().toISOString()} - ${req.method} ${req.originalUrl} from IP: ${req.ip}`);
+    // Loga todas as requisições, incluindo health checks
+    console.log(`[Request] ${req.method} ${req.originalUrl} (IP: ${req.ip})`);
     next();
 });
 
-
 // --- Rotas ---
-app.get('/', (req, res) => { /* ... (rota raiz como antes) ... */ });
-app.use('/api/auth', authRoutes); // Rotas de autenticação
+app.get('/', (req, res) => {
+    res.status(200).json({ message: 'API de Autenticação Online!', version: '1.0.0' });
+});
+app.use('/api/auth', authRoutes);
 
 // --- Tratamento de Erros ---
-// 404 Handler (como antes)
-app.use((req, res, next) => { /* ... */ });
-// Error Handler Genérico (como antes)
-app.use((err, req, res, next) => {
-    console.error("ERRO NÃO TRATADO:", err);
+// 404 Handler
+app.use((req, res, next) => {
+    res.status(404).json({ message: `Rota não encontrada: ${req.originalUrl}` });
+});
 
-    // Tratamento específico para erro CORS
+// Error Handler Genérico
+app.use((err, req, res, next) => {
+    // Log do erro no servidor de forma mais detalhada
+    console.error(`[Erro Não Tratado] ${req.method} ${req.originalUrl} - ${err.message}`);
+    console.error(err.stack || err); // Log stack trace completo para debug
+
     if (err.message === 'Não permitido por CORS') {
         return res.status(403).json({ message: 'Origem não permitida por CORS.' });
     }
 
     const statusCode = err.statusCode || 500;
+    // Mensagem mais genérica para erros 500 em produção
     const message = process.env.NODE_ENV === 'production' && statusCode === 500
-        ? 'Ocorreu um erro interno no servidor.'
-        : err.message || 'Erro interno.';
+        ? 'Ocorreu um erro inesperado no servidor.'
+        : err.message || 'Erro interno no servidor.';
 
     res.status(statusCode).json({ message });
 });
 
-
 // --- Inicialização do Servidor ---
-app.listen(PORT, () => { /* ... (logs de inicialização como antes) ... */ });
+app.listen(PORT, () => {
+    console.log('-------------------------------------------------------');
+    console.log(`✅ Servidor da API iniciado com sucesso!`);
+    console.log(`🚀 Escutando em: http://localhost:${PORT}`);
+    console.log(`🌱 Ambiente: ${process.env.NODE_ENV || 'development'}`);
+    console.log('-------------------------------------------------------');
+    // Alerta de segurança para JWT_SECRET (mantido)
+    if (!process.env.JWT_SECRET || process.env.JWT_SECRET === 'seu_segredo_super_secreto_e_longo_aqui_troque_isso') {
+        console.warn("⚠️ ALERTA DE SEGURANÇA: JWT_SECRET não está definido ou está usando o valor padrão! Defina uma chave secreta forte.");
+    }
+    if (!process.env.JWT_REFRESH_SECRET || process.env.JWT_REFRESH_SECRET === 'outro_segredo_diferente_super_secreto_e_longo_aqui') {
+        console.warn("⚠️ ALERTA DE SEGURANÇA: JWT_REFRESH_SECRET não está definido ou está usando o valor padrão! Defina uma chave secreta forte e diferente.");
+    }
+});
