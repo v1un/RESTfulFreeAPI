@@ -1,8 +1,6 @@
 ﻿// config/database.js
 const { Pool } = require('pg');
 
-// dotenv.config() é chamado apenas em server.js
-
 const DATABASE_URL = process.env.DATABASE_URL;
 
 if (!DATABASE_URL) {
@@ -16,7 +14,6 @@ const pool = new Pool({
     // ssl: { rejectUnauthorized: false } // Ajustar conforme necessidade/docs do Neon
 });
 
-// Testar a conexão ao iniciar
 pool.query('SELECT NOW()', (err, res) => {
     if (err) {
         console.error("[DB] ERRO: Falha fatal ao conectar ao PostgreSQL.", err);
@@ -51,8 +48,8 @@ async function addUser({ username, passwordHash, role }) {
     const query = {
         text: `INSERT INTO users (username, "passwordHash", "role")
                VALUES ($1, $2, $3)
-                   RETURNING id, username, "createdAt", "role"`, // Role agora é obrigatório no INSERT
-        values: [username, passwordHash, role || 'user'], // Garante que role 'user' seja o padrão se não especificado
+               RETURNING id, username, "createdAt", "role"`,
+        values: [username, passwordHash, role || 'user'],
     };
     try {
         console.log(`[DB] Tentando inserir usuário: ${username} (Role: ${role || 'user'})`);
@@ -61,7 +58,7 @@ async function addUser({ username, passwordHash, role }) {
         console.log(`[DB] Usuário '${username}' inserido com sucesso (ID: ${newUser.id}, Role: ${newUser.role}).`);
         return newUser;
     } catch (error) {
-        if (error.code === '23505') { // Código de erro do Postgres para unique_violation
+        if (error.code === '23505') {
             console.warn(`[DB] Falha ao inserir: Usuário '${username}' já existe.`);
             throw new Error('Nome de usuário já existe.');
         }
@@ -70,15 +67,28 @@ async function addUser({ username, passwordHash, role }) {
     }
 }
 
+/**
+ * Busca todos os usuários registrados (sem o hash da senha).
+ * @returns {Promise<Array<object>>} Um array com os usuários.
+ */
+async function findAllUsers() {
+    // Seleciona apenas os campos seguros/necessários
+    const query = {
+        text: 'SELECT id, username, "role", "createdAt" FROM users ORDER BY id ASC',
+    };
+    try {
+        const result = await pool.query(query);
+        console.log(`[DB] Buscados ${result.rows.length} usuários.`);
+        return result.rows;
+    } catch (error) {
+        console.error('[DB] Erro ao buscar todos os usuários.', error);
+        throw new Error('Erro ao consultar usuários.');
+    }
+}
+
 
 // --- Funções de Código de Convite (Invite Code Functions) ---
 
-/**
- * Adiciona um novo código de convite ao banco de dados.
- * @param {string} code - O código de convite gerado.
- * @param {number} adminUserId - O ID do usuário admin que gerou o código.
- * @returns {Promise<object>} O objeto do código de convite criado.
- */
 async function addInviteCode(code, adminUserId) {
     const query = {
         text: `INSERT INTO invite_codes (code, created_by) VALUES ($1, $2)
@@ -90,21 +100,15 @@ async function addInviteCode(code, adminUserId) {
         console.log(`[DB] Código de convite '${code}' adicionado pelo Admin ID: ${adminUserId}.`);
         return result.rows[0];
     } catch (error) {
-        // Tratar erro de código duplicado (embora raro com boa geração)
         if (error.code === '23505') {
             console.warn(`[DB] Tentativa de inserir código de convite duplicado: ${code}`);
-            throw new Error('Código de convite duplicado.'); // Ou tentar gerar novo código
+            throw new Error('Código de convite duplicado.');
         }
         console.error(`[DB] Erro ao adicionar código de convite '${code}'.`, error);
         throw new Error('Erro ao salvar código de convite.');
     }
 }
 
-/**
- * Encontra um código de convite pelo próprio código.
- * @param {string} code - O código de convite a ser procurado.
- * @returns {Promise<object|null>} O objeto do código ou null se não encontrado.
- */
 async function findInviteCode(code) {
     const query = {
         text: 'SELECT id, code, is_used, created_by, used_by, created_at, used_at FROM invite_codes WHERE code = $1',
@@ -112,39 +116,28 @@ async function findInviteCode(code) {
     };
     try {
         const result = await pool.query(query);
-        if (result.rows.length > 0) {
-            return result.rows[0];
-        }
-        return null;
+        // Não loga aqui para não poluir - logará no controller se necessário
+        return result.rows.length > 0 ? result.rows[0] : null;
     } catch (error) {
         console.error(`[DB] Erro ao buscar código de convite '${code}'.`, error);
         throw new Error('Erro ao consultar código de convite.');
     }
 }
 
-/**
- * Marca um código de convite como usado.
- * @param {string} code - O código a ser marcado como usado.
- * @param {number} userId - O ID do usuário que utilizou o código.
- * @returns {Promise<boolean>} True se o código foi marcado com sucesso, false caso contrário.
- */
 async function markInviteCodeAsUsed(code, userId) {
-    // Usamos WHERE is_used = false para garantir atomicidade simples (evita usar um código já usado em race condition)
     const query = {
         text: `UPDATE invite_codes
                SET is_used = true, used_by = $1, used_at = CURRENT_TIMESTAMP
                WHERE code = $2 AND is_used = false
-               RETURNING id`, // Retorna id se a atualização funcionou
+               RETURNING id`,
         values: [userId, code]
     };
     try {
         const result = await pool.query(query);
-        // Se rowsAffected (ou RETURNING teve resultado) for 1, a atualização foi bem-sucedida
         if (result.rowCount === 1) {
             console.log(`[DB] Código de convite '${code}' marcado como usado pelo User ID: ${userId}.`);
             return true;
         }
-        // Se rowCount for 0, o código não existia ou já estava usado
         console.warn(`[DB] Código de convite '${code}' não encontrado ou já estava usado ao tentar marcar.`);
         return false;
     } catch (error) {
@@ -153,12 +146,36 @@ async function markInviteCodeAsUsed(code, userId) {
     }
 }
 
+/**
+ * Busca todos os códigos de convite registrados.
+ * TODO: Considerar paginação para muitos códigos.
+ * TODO: Considerar JOIN para buscar username do criador/usuário.
+ * @returns {Promise<Array<object>>} Um array com os códigos de convite.
+ */
+async function findAllInviteCodes() {
+    const query = {
+        text: `SELECT id, code, is_used, created_by, used_by, created_at, used_at
+               FROM invite_codes
+               ORDER BY created_at DESC`, // Ordena pelos mais recentes primeiro
+    };
+    try {
+        const result = await pool.query(query);
+        console.log(`[DB] Buscados ${result.rows.length} códigos de convite.`);
+        return result.rows;
+    } catch (error) {
+        console.error('[DB] Erro ao buscar todos os códigos de convite.', error);
+        throw new Error('Erro ao consultar códigos de convite.');
+    }
+}
+
 module.exports = {
     // User functions
     findUserByUsername,
     addUser,
+    findAllUsers, // <-- Exporta nova função
     // Invite code functions
     addInviteCode,
     findInviteCode,
     markInviteCodeAsUsed,
+    findAllInviteCodes, // <-- Exporta nova função
 };
