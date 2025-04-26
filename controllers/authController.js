@@ -52,30 +52,31 @@ function generateRefreshToken(user) {
 // --- Controladores das Rotas ---
 
 /**
- * Registra um novo usuário.
+ * Registra um novo usuário. SEMPRE com a role 'user'.
  */
 const registerUser = async (req, res) => {
-    // A validação de entrada é feita pelos middlewares na rota
+    // A validação de entrada (username, password) é feita pelos middlewares na rota
 
-    const { username, password, role } = req.body; // Pode receber 'role' opcionalmente
+    // IGNORAMOS qualquer 'role' que possa vir do corpo da requisição por segurança
+    const { username, password } = req.body;
 
     try {
-        console.log(`[Register] Iniciando registro para: ${username}`);
+        console.log(`[Register] Iniciando registro público para: ${username}`);
 
         // Gera o hash da senha
         const passwordHash = await bcrypt.hash(password, BCRYPT_SALT_ROUNDS);
-        // console.log(`[Register] Hash gerado para: ${username}`); // Log interno removido
 
-        // Salva o novo usuário no banco de dados (passando role se existir)
-        const newUser = await db.addUser({ username, passwordHash, role }); // Passa role para a função do DB
+        // Salva o novo usuário no banco de dados, FORÇANDO a role 'user' (ou deixando o default do DB)
+        // Não passamos o 'role' do req.body para db.addUser
+        const newUser = await db.addUser({ username, passwordHash }); // Role usará o DEFAULT 'user' do DB
 
-        console.log(`[Register] Sucesso: Usuário ${username} (ID: ${newUser.id}, Role: ${newUser.role}) criado.`);
+        console.log(`[Register] Sucesso: Usuário ${username} (ID: ${newUser.id}, Role: ${newUser.role}) criado via registro público.`);
         // Retorna resposta de sucesso
         res.status(201).json({
             message: 'Usuário registrado com sucesso!',
             userId: newUser.id,
             username: newUser.username,
-            role: newUser.role
+            role: newUser.role // Será 'user'
         });
 
     } catch (error) {
@@ -173,7 +174,12 @@ const refreshToken = async (req, res) => {
             // const userPayload = { id: currentUser.id, username: currentUser.username, role: currentUser.role };
 
             // Usando dados do token por simplicidade:
-            const userPayload = { id: userId, role: userRole, username: 'N/A' /* Username não está no refresh token */ };
+            // Tentamos obter o username do DB se possível, mas pode não estar implementado findUserById
+            let usernameFromDb = 'N/A';
+            // if (currentUser) usernameFromDb = currentUser.username; // Se buscar no DB
+
+            const userPayload = { id: userId, role: userRole, username: usernameFromDb };
+
 
             const newAccessToken = generateAccessToken(userPayload);
 
@@ -184,7 +190,7 @@ const refreshToken = async (req, res) => {
         });
     } catch (error) {
         // Captura erros inesperados (ex: se a busca no DB falhar, caso implementada)
-        console.error(`[Refresh] ERRO ao gerar novo token para User ID ${req?.user?.id || 'N/A'}:`, error);
+        console.error(`[Refresh] ERRO ao gerar novo token:`, error);
         res.status(500).json({ message: 'Erro ao processar a renovação do token.' });
     }
 };
@@ -217,7 +223,7 @@ const logoutUser = async (req, res) => {
                 console.log(`[Logout] Sucesso: Refresh Token (JTI: ${jti}) invalidado para User ID ${userId}.`);
                 res.status(200).json({ message: 'Logout bem-sucedido!' });
             } else {
-                // Token válido/expirado mas sem JTI (não deveria acontecer)
+                // Token válido/expirado mas sem JTI (não deveria acontecer com nossa geração de token)
                 console.warn(`[Logout] Aviso: Token de refresh processado, mas sem JTI. Não foi possível adicionar à blacklist (User ID: ${userId}).`);
                 // Retorna sucesso mesmo assim, pois o cliente não pode mais usar o token (se expirado)
                 // ou não havia como invalidar (sem jti)
@@ -241,8 +247,9 @@ const getUserProfile = async (req, res) => {
     // Os dados do usuário (id, username, role) estão em req.user
     try {
         const userId = req.user.id;
+        const username = req.user.username; // Username vem do Access Token
         // Log da ação
-        console.log(`[Profile] Perfil acessado por User ID: ${userId} (${req.user.username})`);
+        console.log(`[Profile] Perfil acessado por User ID: ${userId} (${username})`);
 
         // Em uma aplicação real, você poderia buscar mais dados do DB aqui
         // const userProfile = await db.findUserById(userId); // Exemplo
@@ -252,7 +259,7 @@ const getUserProfile = async (req, res) => {
             message: "Dados do perfil obtidos com sucesso.",
             user: {
                 id: req.user.id,
-                username: req.user.username,
+                username: username, // Garante que o username retornado é o do token
                 role: req.user.role
                 // ... outros dados do perfil se buscados no DB
             }
@@ -266,9 +273,9 @@ const getUserProfile = async (req, res) => {
 
 
 module.exports = {
-    registerUser,
+    registerUser, // Versão segura que não aceita role
     loginUser,
     refreshToken,
     logoutUser,
-    getUserProfile // Exporta a nova função de perfil
+    getUserProfile
 };

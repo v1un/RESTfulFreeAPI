@@ -1,0 +1,28 @@
+﻿{
+  "name": "API de Autenticação (Node/Express)",
+  "version": "1.1.0",
+  "description": "Documentação da API RESTful para autenticação e gerenciamento de usuários.",
+  "title": "API Auth Docs (apiDoc)",
+  "url": "https://restfulfreeapi.onrender.com",
+  "sampleUrl": "https://restfulfreeapi.onrender.com",
+  "template": {
+    "forceLanguage": "pt_br"
+  },
+  "header": {
+    "title": "Introdução",
+    "filename": "HEADER.md"
+  },
+  "footer": {
+    "title": "Informações Adicionais",
+    "filename": "FOOTER.md"
+  },
+  "order": [
+    "Register",
+    "Login",
+    "RefreshToken",
+    "Logout",
+    "GetUserProfile",
+    "AdminOnly",
+    "StaffArea"
+  ]
+}
