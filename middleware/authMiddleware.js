@@ -2,14 +2,13 @@
 const jwt = require('jsonwebtoken');
 const { isBlacklisted } = require('../config/tokenBlacklist'); // Importar blacklist
 
-// dotenv.config() FOI REMOVIDO DAQUI
+// dotenv.config() REMOVIDO DAQUI
 
 const JWT_SECRET = process.env.JWT_SECRET;
 const JWT_REFRESH_SECRET = process.env.JWT_REFRESH_SECRET; // Segredo do Refresh Token
 
 if (!JWT_SECRET || !JWT_REFRESH_SECRET) {
     console.error("ERRO FATAL: Variáveis de ambiente JWT_SECRET ou JWT_REFRESH_SECRET não definidas no middleware.");
-    // Ou chegaram vazias do server.js
     process.exit(1);
 }
 
@@ -17,23 +16,12 @@ if (!JWT_SECRET || !JWT_REFRESH_SECRET) {
  * Middleware para verificar o token JWT de ACESSO.
  */
 const verifyAccessToken = (req, res, next) => {
-    verifyToken(req, res, next, JWT_SECRET, false); // Usa segredo de acesso, não verifica blacklist
+    // Chama a função genérica verifyToken para Access Tokens
+    verifyToken(req, res, next, JWT_SECRET, false); // checkBlacklist = false
 };
 
 /**
- * Middleware para verificar o token JWT de REFRESH (geralmente usado internamente pelo controller).
- * Se for usado como middleware de rota, precisa garantir que o token está onde ele espera (ex: req.body.refreshToken)
- * A implementação atual é mais um helper para ser chamado pelo controller ou outro middleware.
- */
-// const verifyRefreshToken = (req, res, next) => { ... } // Removido como middleware de rota direto
-
-/**
  * Função auxiliar genérica para verificar um token vindo do Header Authorization Bearer.
- * @param {Object} req - Request object
- * @param {Object} res - Response object
- * @param {Function} next - Next function
- * @param {String} secret - O segredo JWT a ser usado para verificação
- * @param {Boolean} checkBlacklist - Se deve verificar a blacklist (usado para refresh tokens se vierem do header)
  */
 function verifyToken(req, res, next, secret, checkBlacklist = false) {
     const authHeader = req.headers.authorization || req.headers.Authorization;
@@ -45,20 +33,22 @@ function verifyToken(req, res, next, secret, checkBlacklist = false) {
 
     const token = authHeader.split(' ')[1];
 
+    // Callback para jwt.verify
     jwt.verify(token, secret, (err, decoded) => {
-        handleTokenVerification(err, decoded, token, res, next, checkBlacklist);
+        // CORREÇÃO: Passa 'req' para handleTokenVerification
+        handleTokenVerification(req, res, next, err, decoded, token, checkBlacklist);
     });
 }
 
 
 /**
- * Função auxiliar para lidar com o resultado da verificação do token (chamada por jwt.verify).
+ * Função auxiliar para lidar com o resultado da verificação do token.
+ * AGORA recebe 'req' como primeiro parâmetro.
  */
-function handleTokenVerification(err, decoded, token, res, next, checkBlacklist) {
+function handleTokenVerification(req, res, next, err, decoded, token, checkBlacklist) {
     if (err) {
         let status = 403;
         let message = 'Falha na autenticação do token.';
-        // Tenta decodificar mesmo com erro para logar o usuário, se possível
         const partiallyDecoded = jwt.decode(token, {complete: true});
         const usernameForLog = partiallyDecoded?.payload?.username || 'N/A';
 
@@ -71,6 +61,7 @@ function handleTokenVerification(err, decoded, token, res, next, checkBlacklist)
         } else {
             console.warn(`[Auth] Falha: Erro desconhecido na verificação do token (Usuário: ${usernameForLog}, Erro: ${err.message}).`);
         }
+        // Retorna a resposta de erro para o cliente
         return res.status(status).json({ message });
     }
 
@@ -80,10 +71,11 @@ function handleTokenVerification(err, decoded, token, res, next, checkBlacklist)
         return res.status(401).json({ message: 'Token inválido (revogado).' }); // Token foi invalidado (logout)
     }
 
-    // Token válido! Anexa payload decodificado ao request.
+    // Token válido! Anexa payload decodificado ao objeto 'req'.
+    // CORREÇÃO: Agora 'req' é um parâmetro definido e acessível.
     req.user = decoded;
-    // Log de sucesso removido para diminuir ruído
-    // console.log(`[Auth] Token verificado: User ${req.user.username} (ID: ${req.user.id}, Role: ${req.user.role})`);
+
+    // Chama o próximo middleware na cadeia (ou o controller da rota)
     next();
 }
 
@@ -95,10 +87,9 @@ function handleTokenVerification(err, decoded, token, res, next, checkBlacklist)
  */
 const verifyRoles = (allowedRoles) => {
     return (req, res, next) => {
-        // req.user deve ter sido populado por verifyAccessToken
+        // req.user deve ter sido populado por verifyAccessToken/handleTokenVerification
         if (!req?.user?.role) {
             console.warn('[Auth] Falha RoleCheck: Usuário não autenticado ou sem role no token.');
-            // Usar 403 Forbidden aqui, pois o usuário está autenticado, mas não autorizado para o recurso
             return res.status(403).json({ message: 'Acesso proibido. Papel do usuário não definido no token.' });
         }
 
@@ -113,8 +104,6 @@ const verifyRoles = (allowedRoles) => {
             return res.status(403).json({ message: 'Acesso proibido. Permissões insuficientes.' }); // 403 Forbidden
         }
 
-        // Log de sucesso da verificação de role (opcional)
-        // console.log(`[Auth] RoleCheck OK: User ${req.user.username} (Role: ${userRole})`);
         next(); // Usuário tem a permissão necessária
     };
 };
@@ -122,6 +111,6 @@ const verifyRoles = (allowedRoles) => {
 
 module.exports = {
     verifyAccessToken,
-    // verifyRefreshToken não é exportado como middleware de rota direto
+    // verifyRefreshToken (se existisse como middleware direto, precisaria de ajuste similar)
     verifyRoles
 };
