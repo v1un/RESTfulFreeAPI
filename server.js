@@ -25,6 +25,7 @@ const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
 const authRoutes = require('./routes/authRoutes'); // Rotas de autenticação/usuário
 const adminRoutes = require('./routes/adminRoutes'); // Rotas de administração
+const aiRoutes = require('./routes/aiRoutes'); // Rotas de AI Chat
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -102,6 +103,8 @@ app.use('/api/auth', authRoutes);
 // Rotas de ADMINISTRAÇÃO (protegidas internamente com middleware de role)
 app.use('/api/admin', adminRoutes);
 
+// Rotas de AI Chat
+app.use('/api/ai', aiRoutes);
 
 // --- Tratamento de Erros ---
 // Middleware para tratar rotas não encontradas (404) - Deve vir depois das rotas da API
